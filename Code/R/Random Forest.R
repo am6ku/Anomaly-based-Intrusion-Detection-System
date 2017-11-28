@@ -32,7 +32,7 @@ boxplot(all_data[all_data[,"mean_src_pkts"]<100,"mean_src_pkts"]~all_data[all_da
         notch=FALSE, 
         col=(c("darkgreen","red")),
         main="Mean Source Packets Distribution", xlab = "Non Malicious/Malacious", ylab = "Mean Source Packets")
-
+ 
 #Mean Duration
 boxplot(all_data[all_data[,"mean_duration"],"mean_duration"]~all_data[all_data[,"mean_duration"],"Malicious"],
         notch=FALSE, 
@@ -84,6 +84,9 @@ confusionMatrix(test_pred_svmr, as.factor(caret_test[,1]))
 # Specificity : 0.04608         
 # Pos Pred Value : 0.83636 (Correct Benign)         
 # Neg Pred Value : 1.00000  (Correct Malicious)      
+#F1 = 0.4554445
+
+#F1 AUC and ROC
 
 #Balanced Accuracy : 0.52304 
 
@@ -142,9 +145,10 @@ confusionMatrix(test_pred_crf, as.factor(caret_test[,1]))
 # Sensitivity : 0.9981          
 # Specificity : 0.9724          
 # Pos Pred Value : 0.9944 (Correct Benign)         
-# Neg Pred Value : 0.9906 (Correct Malicious)          
+# Neg Pred Value : 0.9906 (Correct Malicious)           
+#F1 = 0.4962482
 
 # Balanced Accuracy : 0.9852          
 
-
-
+#Different malware famililes
+#Percent parameters used
