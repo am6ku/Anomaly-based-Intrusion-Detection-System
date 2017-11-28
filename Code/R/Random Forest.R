@@ -6,6 +6,10 @@ library(plyr)
 library(gbm)
 library(caret)
 
+#Parallelization
+library(parallel)
+library(doParallel)
+
 all_data <- read.csv('mal_and_benign_traces.csv', header=T) #reading in the data
 
 #Create test set for cross validation using gini scores
@@ -14,49 +18,51 @@ set.seed(134)
 train_index <- sample(1:nrow(all_data), 3000, replace= FALSE)
 
 X.train <- all_data[train_index,-c(1:6)]
-Y.train <- all_data[-train_index,-c(1:6)]
+Y.train <- as.factor(all_data[train_index, 1])
 
-X.test = as.factor(all_data[train_index, 1])
-Y.test = as.factor(all_data[-train_index, 1])
+X.test <-  all_data[-train_index,-c(1:6)]
+Y.test <-  as.factor(all_data[-train_index, 1])
 
+summary(X.test)[2]/(summary(X.test)[1]+summary(X.test)[2])*100
 summary(Y.test)[2]/(summary(Y.test)[1]+summary(Y.test)[2])*100
 
-
-
-#Samsize was chosen based on 1s in train data set
-#Create clusters for paralellizing random forest cross vaidation for different m values and number of trees 
-cluster = makeCluster(4, type = "SOCK")
-registerDoSNOW(cluster)
-
-set.seed(123)
-rf1 <- foreach(mtry = c(3,6,7,49),ntree = c(100,500,1000), .combine="cbind", .multicombine=TRUE,
-               .packages='randomForest') %dopar% {
-                 randomForest(X.train, Y.train, mtry = mtry, ntree = ntree,
-                              importance = TRUE,sampsize = c(3634,3634))
-               }
-
-#Cross validation using parallelization produced m = 3 and ntree = 1000 as optimal
-
-#Test with Gini score 
+#First run to check variable importance
 set.seed(12)
-rf_cv <- randomForest(X.train, as.factor(Y.train), mtry = 3, ntree = 1000,
-                      sampsize = c(3634, 3634))
-pred_cv <- predict(rf_cv, X.test, type = "prob")
+rf1 <- randomForest(X.train, Y.train, mtry = 2, ntree = 300)
+var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
+  
 
-preds <- pred_cv[,1]
-normalized.gini.index(as.numeric(Y.test), pred_cv[,2])
-#The Gini score severely over estimated our run with 100000 obs at 0.394
+caret_data <- all_data[train_index,-c(2:6)]
+caret_test <- all_data[-train_index,-c(2:6)]
 
-#Check 1s in train data
-summary(as.factor(train[,1]))[2]#21694
+# Grid Search
 
-#Running that on whole dataset
-rf_final <- randomForest(train[,-c(1,2)], as.factor(train[,1]), mtry = 3, ntree = 1000,
-                         sampsize = c(21694, 21694))
+#Create custom RF function for grid search in Caret 
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+  predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+  predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
 
-#Create Predicitions for submission
-pred <- predict(rf_final, test, type = "prob")
+#Start clusters
+cluster <- makeCluster(detectCores()) # convention to leave 1 core for OS
+registerDoParallel(cluster)
 
-prediction <- data.frame(test$id,pred[,2])
-colnames(prediction) = c("id", "target")
-write.csv(prediction, file = "randomforest.csv", row.names = FALSE)
+#Caret implementation of customRF
+control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid", allowParallel = TRUE)
+set.seed(3)
+metric <- "Accuracy"
+tunegrid <- expand.grid(.mtry=c(2, 6, 33), .ntree=c(100, 200, 300, 500))
+rf_gridsearch <- train(as.factor(Malicious) ~., data=caret_data, method= customRF, 
+                       metric=metric, tuneGrid = tunegrid, trControl=control)
+print(rf_gridsearch)
+plot(rf_gridsearch)
+
+
