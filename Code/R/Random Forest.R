@@ -168,3 +168,25 @@ confusionMatrix(test_pred_crf, as.factor(caret_test[,1]))
 #Different malware famililes
 #Percent parameters used
 
+####################################ROC CURVE####################################
+# Calculating AUC
+auc <- roc(ifelse(caret_test[,1]=="0",1,0), ifelse(test_pred_svmr=="0",1,0))
+auc1 <- roc(ifelse(caret_test[,1]=="0",1,0), ifelse(test_pred_crf=="0",1,0))
+print(auc$auc) # 0.5
+print(auc1$auc) # 0.4983
+
+# calculating the values for ROC curve
+pred <- prediction(as.numeric(as.character(test_pred_svmr)), as.numeric(caret_test$Malicious))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+pred1 <- prediction(as.numeric(as.character(test_pred_crf)), as.numeric(caret_test$Malicious))
+perf1 <- performance(pred1, measure = "tpr", x.measure = "fpr")
+# changing params for the ROC plot - width, etc
+par(mar=c(5,5,2,2),xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1.4)
+# plotting the ROC curve
+plot(perf, col = "blue")
+plot(perf1, add = TRUE, col = "red")
+# calculating AUC
+auc <- performance(pred, "auc")
+auc # 0.5
+auc1 <- performance(pred1, "auc")
+auc1 # 0.4983051
