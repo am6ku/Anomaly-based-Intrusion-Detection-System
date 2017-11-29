@@ -17,7 +17,7 @@ all_data <- read.csv('mal_and_benign_traces.csv', header=T) #reading in the data
 
 #First run to check variable importance
 set.seed(12)
-rf1 <- randomForest(all_data[,-1], all_data[,1], mtry = 2, ntree = 300)
+rf1 <- randomForest(all_data[,-c(1:6)], all_data[,1], mtry = 2, ntree = 300)
 var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
   
 
@@ -41,8 +41,6 @@ boxplot(all_data[all_data[,"mean_duration"],"mean_duration"]~all_data[all_data[,
 
 
 
-
-
 ##################### Splitting Data #####################
 set.seed(134)
 
@@ -55,6 +53,7 @@ caret_test <- all_data[-train_index,-c(2:6)]
 
 
 ##################### Caret Implementation of Radial SVM ##################### 
+control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid", allowParallel = TRUE)
 
 grid_radial <- expand.grid(sigma = c(0,0.01, 0.1,1), C = c(0.01, 0.1,1, 2,5))
 
@@ -112,7 +111,6 @@ cluster <- makeCluster(detectCores())
 registerDoParallel(cluster)
 
 #Caret implementation of customRF
-control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid", allowParallel = TRUE)
 set.seed(3)
 metric <- "Accuracy"
 tunegrid <- expand.grid(.mtry=c(2, 6, 33), .ntree=c(100, 200, 300, 500))
