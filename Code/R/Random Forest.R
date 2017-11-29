@@ -11,9 +11,22 @@ library(parallel)
 library(doParallel)
 
 
-##################### Data Exploration #####################
+##################### Reading & Splitting Data #####################
 
 all_data <- read.csv('mal_and_benign_traces.csv', header=T) #reading in the data
+
+colnames(all_data)[20:29] <- paste("src", colnames(all_data)[20:29], sep = "_")
+colnames(all_data)[30:39] <- paste("dest", colnames(all_data)[30:39], sep = "_")
+
+set.seed(134)
+
+train_index <- sample(1:nrow(all_data), 3000, replace= FALSE)
+
+caret_data <- all_data[train_index,-c(2:6)]
+caret_test <- all_data[-train_index,-c(2:6)]
+
+
+##################### Data Exploration #####################
 
 #First run to check variable importance
 set.seed(12)
@@ -41,29 +54,37 @@ boxplot(all_data[all_data[,"mean_duration"],"mean_duration"]~all_data[all_data[,
 
 
 
-##################### Splitting Data #####################
-set.seed(134)
-
-train_index <- sample(1:nrow(all_data), 3000, replace= FALSE)
-
-caret_data <- all_data[train_index,-c(2:6)]
-caret_test <- all_data[-train_index,-c(2:6)]
-
-
-
 
 ##################### Caret Implementation of Radial SVM ##################### 
-control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid", allowParallel = TRUE)
 
-grid_radial <- expand.grid(sigma = c(0,0.01, 0.1,1), C = c(0.01, 0.1,1, 2,5))
+#Start clusters
+cluster <- makeCluster(detectCores())
+registerDoParallel(cluster)
+
+
+control <- trainControl(method="repeatedcv", number=10, 
+                        summaryFunction=twoClassSummary, classProbs=T,
+                        savePredictions = T,allowParallel = TRUE)
+
 
 svm_Radial <- train(as.factor(Malicious) ~., data = caret_data, method = "svmRadial",
                     trControl=control,
                     preProcess = c("center"),
-                    tuneGrid = grid_radial,
                     tuneLength = 10)
 
 print(svm_Radial)
+
+# Select a parameter setting
+selectedIndices <- svm_Radial$pred$C == 32
+
+
+g <- ggplot(svm_Radial$pred[selectedIndices, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
+  geom_roc(n.cuts=0) + 
+  coord_equal() +
+  style_roc()
+
+g + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(g))$AUC, 4)))
+
 
 #test
 test_pred_svmr <- predict(svm_Radial, newdata = caret_test[,-1])
@@ -106,19 +127,15 @@ customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
 customRF$sort <- function(x) x[order(x[,1]),]
 customRF$levels <- function(x) x$classes
 
-#Start clusters
-cluster <- makeCluster(detectCores())
-registerDoParallel(cluster)
 
 #Caret implementation of customRF
 set.seed(3)
-metric <- "Accuracy"
+metric <- "ROC"
 tunegrid <- expand.grid(.mtry=c(2, 6, 33), .ntree=c(100, 200, 300, 500))
 rf_gridsearch <- train(as.factor(Malicious) ~., data=caret_data, method= customRF, 
-                       metric=metric, tuneGrid = tunegrid, trControl=control)
+                       metric="ROC", tuneGrid = tunegrid, trControl=control)
 print(rf_gridsearch)
 plot(rf_gridsearch)
-
 
 #Create randomforest on optimum mtry and ntrees
 crf <- randomForest(caret_data[,-1], as.factor(caret_data[,1]), mtry = 6, ntree = 200)
@@ -150,3 +167,4 @@ confusionMatrix(test_pred_crf, as.factor(caret_test[,1]))
 
 #Different malware famililes
 #Percent parameters used
+
