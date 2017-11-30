@@ -199,13 +199,36 @@ confusionMatrix(test_pred_rf, as.factor(caret_test[,1]))
 
 
 
-##################### Caret Implementation of Random Forest ##################### 
+##################### Caret Implementation of Naive Bayes ##################### 
 
 
-#test
-test_pred_glm <- predict(glm, newdata = caret_test[,-1])
-confusionMatrix(test_pred_glm, as.factor(caret_test[,1]))
+#Start clusters
+cluster <- makeCluster(detectCores())
+registerDoParallel(cluster)
 
+set.seed(234)
+control <- trainControl(method="cv", 
+                        summaryFunction=twoClassSummary, classProbs=T,
+                        savePredictions = T,allowParallel = TRUE)
+
+
+nb <- train(as.factor(Malicious) ~., data = caret_data, method = "nb",
+            trControl=control,
+            preProcess = c("center"),
+            metric = "ROC",
+            tuneLength = 10)
+
+print(nb)
+
+# Select a parameter setting
+selectedIndices_nb <- nb$pred$usekernel == "TRUE"
+
+k <- ggplot(nb$pred[selectedIndices_nb, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
+  geom_roc(n.cuts=0) + 
+  coord_equal() +
+  style_roc()
+
+k + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(k))$AUC, 4)))
 
 
 
@@ -213,30 +236,37 @@ confusionMatrix(test_pred_glm, as.factor(caret_test[,1]))
 
 rf_preds <- rf$pred[selectedIndices_rf, ]
 svm_preds <- svm_Radial$pred[selectedIndices_svm, ]
+nb_preds <- nb$pred[selectedIndices_nb, ]
 
-#Ordering data frame for melting
-rf_preds <- rf_preds[order(rf_preds$rowIndex),]
-svm_preds <- svm_preds[order(svm_preds$rowIndex),]
-
+#Select only relevant columns
 rf_no_preds <- rf_preds[, c(2,4,5)]
 svm_no_preds <- svm_preds[, c(2,4,5)]
+nb_no_preds <- nb_preds[, c(2,4,5)]
 
 #Rename probablilites column to identify model
 colnames(rf_no_preds)[2] <- "Random Forest"
 colnames(svm_no_preds)[2] <- "Radial SVM"
+colnames(nb_no_preds)[2] <- "Naive Bayes"
+
 
 #Merge probabilities
-all_preds <- merge(rf_no_preds,svm_no_preds, by = c("obs", "rowIndex"))
+all_preds <- merge(rf_no_preds,svm_no_preds, nb_no_preds, by =  c("obs", "rowIndex"))
+
+all_preds <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("obs", "rowIndex"), all = TRUE),list(rf_no_preds,svm_no_preds, nb_no_preds))
+
 
 #Melt into longform for vizualization
-longtest <- melt_roc(all_preds, "obs", c("Random Forest", "Radial SVM"))
+longtest <- melt_roc(all_preds, "obs", c("Random Forest", "Radial SVM", "Naive Bayes"))
+  
 
 #Plot
 combined_roc <- ggplot(longtest, aes(d = D, m = M, color = name )) + geom_roc(n.cuts = F, size = 3)
+  
         
 
-combined_roc+ annotate("text", y=0.28, x=0.74,color = "grey93",size = 6,label=paste("RF AUC =",round((calc_auc(h))$AUC, 4)))+
-              annotate("text", y=0.23, x=0.74,color = "grey93",size = 6,label=paste("SVM AUC =", round((calc_auc(g))$AUC, 4)))+
+combined_roc+ annotate("text", y=0.28, x=0.74,color = "grey93",size = 8,label=paste("RF AUC =",round((calc_auc(h))$AUC, 4)))+
+              annotate("text", y=0.23, x=0.74,color = "grey93",size = 8,label=paste("SVM AUC =", round((calc_auc(g))$AUC, 4)))+
+              annotate("text", y=0.18, x=0.74,color = "grey93",size = 8,label=paste("NB AUC =", round((calc_auc(k))$AUC, 4)))+
               theme(panel.background = element_rect(fill = 'grey18'),
               axis.text=element_text(size=12, face = "bold",color = "grey93"),
               axis.title=element_text(size=20,face="bold",color = "grey93"),
