@@ -5,6 +5,8 @@ library(plyr)
 library(gbm)
 library(caret)
 library(pROC)
+library(tidyverse)
+
 
 #Parallelization
 library(parallel)
@@ -18,7 +20,7 @@ all_data <- read.csv('mal_and_benign_traces.csv', header=T) #reading in the data
 colnames(all_data)[20:29] <- paste("src", colnames(all_data)[20:29], sep = "_")
 colnames(all_data)[30:39] <- paste("dest", colnames(all_data)[30:39], sep = "_")
 
-all_data$Malicious <- ifelse(all_data$Malicious ==1, "Yes", "No")
+all_data$Malicious <- as.factor(ifelse(all_data$Malicious ==1, "Yes", "No"))
 
 set.seed(134)
 
@@ -32,28 +34,47 @@ caret_test <- all_data[-train_index,-c(2:6)]
 
 #First run to check variable importance
 set.seed(12)
-rf1 <- randomForest(all_data[,-c(1:6)], all_data[,1], mtry = 2, ntree = 300)
+rf1 <- randomForest(all_data[,-c(1:6)], all_data[,1], mtry = 2, ntree = 300, importance = T)
 var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
-  
+
+#Asthetic changes to importance plot
+imp <- data.frame((rf1$importance)[,4])
+
+imp <- imp %>% rownames_to_column(var="Variables") %>% remove_rownames
+colnames(imp)[2] <-  "MeanGiniDecrease"
+imp <- imp[order(-imp$MeanGiniDecrease),][1:25,]
+
+ggplot(imp) + geom_point(aes(x = MeanGiniDecrease,y = reorder(Variables, MeanGiniDecrease)), size = 5, color = "sienna2")+
+              ylab("Variables") + 
+              theme(panel.background = element_rect(fill = 'grey18'),
+              axis.text=element_text(size=12, face = "bold",color = "grey93"),
+              axis.title=element_text(size=20,face="bold",color = "grey93"),
+              plot.background = element_rect(fill = "grey18"))
+
 
 #Mean interval Distribution
-boxplot(all_data[all_data[,"mean_intvl"]<40000,"mean_intvl"]~all_data[all_data[,"mean_intvl"]<40000,"Malicious"],
-        notch=FALSE, 
-        col=(c("darkgreen","red")),
-        main="Mean Interval distribution", xlab = "Non Malicious/Malacious", ylab = "Mean Interval")
+test1 <- all_data[all_data$mean_intvl<30000,]
+
+ggplot(data = test1,aes(x= Malicious, y=mean_intvl, fill = Malicious)) + geom_boxplot()+ 
+  theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
+        axis.title=element_text(size=20,face="bold",color = "grey19"))
+
+
 
 #Mean Source Packets
-boxplot(all_data[all_data[,"mean_src_pkts"]<100,"mean_src_pkts"]~all_data[all_data[,"mean_src_pkts"]<100,"Malicious"],
-        notch=FALSE, 
-        col=(c("darkgreen","red")),
-        main="Mean Source Packets Distribution", xlab = "Non Malicious/Malacious", ylab = "Mean Source Packets")
- 
-#Mean Duration
-boxplot(all_data[all_data[,"mean_duration"],"mean_duration"]~all_data[all_data[,"mean_duration"],"Malicious"],
-        notch=FALSE, 
-        col=(c("darkgreen","red")),
-        main="Mean Duration Distribution", xlab = "Non Malicious/Malacious", ylab = "Mean Duration")
+test2 <- all_data[all_data$mean_src_pkts<100,]
 
+ggplot(data = test2,aes(x= Malicious, y= mean_src_pkts, fill = Malicious)) + geom_boxplot()+
+  theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
+        axis.title=element_text(size=20,face="bold",color = "grey19"))
+
+
+#Mean Duration
+test3 <- all_data[all_data$mean_duration<1000,]
+
+ggplot(data = test3,aes(x= Malicious, y= mean_duration, fill = Malicious)) + geom_boxplot()+
+  theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
+        axis.title=element_text(size=20,face="bold",color = "grey19"))
 
 
 
@@ -111,65 +132,6 @@ confusionMatrix(test_pred_svmr, as.factor(caret_test[,1]))
 #F1 AUC and ROC
 
 #Balanced Accuracy : 0.52304 
-
-
-
-##################### Caret Implementation of Custom Random Forest #####################
-
-#Create custom RF function for grid search in Caret 
-customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
-customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
-customRF$grid <- function(x, y, len = NULL, search = "grid") {}
-customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
-  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
-}
-customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
-  predict(modelFit, newdata)
-customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
-  predict(modelFit, newdata, type = "prob")
-customRF$sort <- function(x) x[order(x[,1]),]
-customRF$levels <- function(x) x$classes
-
-
-#Caret implementation of customRF
-set.seed(3)
-metric <- "ROC"
-tunegrid <- expand.grid(.mtry=c(2, 6, 33), .ntree=c(100, 200, 300, 500))
-rf_gridsearch <- train(as.factor(Malicious) ~., data=caret_data, method= customRF, 
-                       metric="ROC", tuneGrid = tunegrid, trControl=control)
-print(rf_gridsearch)
-plot(rf_gridsearch)
-
-#Create randomforest on optimum mtry and ntrees
-crf <- randomForest(caret_data[,-1], as.factor(caret_data[,1]), mtry = 6, ntree = 200)
-
-#test
-test_pred_crf <- predict(crf, newdata = caret_test[,-1])
-confusionMatrix(test_pred_crf, as.factor(caret_test[,1]))
-
-##################### Custom Random Forest Results #####################
-# Confusion Matrix and Statistics
-# 
-#              Reference
-# Prediction    0    1
-#            0 1056    6
-#            1    2  211
-# 
-# Accuracy : 0.9937          
-# 95% CI : (0.9877, 0.9973)
-# No Information Rate : 0.8298          
-# P-Value [Acc > NIR] : <2e-16          
-
-# Sensitivity : 0.9981          
-# Specificity : 0.9724          
-# Pos Pred Value : 0.9944 (Correct Benign)         
-# Neg Pred Value : 0.9906 (Correct Malicious)           
-#F1 = 0.4962482
-
-# Balanced Accuracy : 0.9852          
-
-#Different malware famililes
-#Percent parameters used
 
 
 
@@ -237,6 +199,16 @@ confusionMatrix(test_pred_rf, as.factor(caret_test[,1]))
 
 
 
+##################### Caret Implementation of Random Forest ##################### 
+
+
+#test
+test_pred_glm <- predict(glm, newdata = caret_test[,-1])
+confusionMatrix(test_pred_glm, as.factor(caret_test[,1]))
+
+
+
+
 ###################### ROC plots ###################
 
 rf_preds <- rf$pred[selectedIndices_rf, ]
@@ -260,10 +232,12 @@ all_preds <- merge(rf_no_preds,svm_no_preds, by = c("obs", "rowIndex"))
 longtest <- melt_roc(all_preds, "obs", c("Random Forest", "Radial SVM"))
 
 #Plot
-combined_roc <- ggplot(longtest, aes(d = D, m = M, color = name )) + geom_roc(n.cuts = F, size = 3) + style_roc()
+combined_roc <- ggplot(longtest, aes(d = D, m = M, color = name )) + geom_roc(n.cuts = F, size = 3)
         
 
-combined_roc + annotate("text", y=0.30, x=0.75,size = 6,label=paste("RF AUC =", round((calc_auc(h))$AUC, 4)))+
-               annotate("text", y=0.25, x=0.75,size = 6,label=paste("SVM AUC =", round((calc_auc(g))$AUC, 4)))+
-               theme(axis.text=element_text(size=15),
-                     axis.title=element_text(size=15,face="bold"),legend.text=element_text(size=15))
+combined_roc+ annotate("text", y=0.28, x=0.74,color = "grey93",size = 6,label=paste("RF AUC =",round((calc_auc(h))$AUC, 4)))+
+              annotate("text", y=0.23, x=0.74,color = "grey93",size = 6,label=paste("SVM AUC =", round((calc_auc(g))$AUC, 4)))+
+              theme(panel.background = element_rect(fill = 'grey18'),
+              axis.text=element_text(size=12, face = "bold",color = "grey93"),
+              axis.title=element_text(size=20,face="bold",color = "grey93"),
+              plot.background = element_rect(fill = "grey18"))
