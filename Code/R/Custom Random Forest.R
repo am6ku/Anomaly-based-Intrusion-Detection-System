@@ -18,6 +18,8 @@ all_data <- read.csv('mal_and_benign_traces.csv', header=T) #reading in the data
 colnames(all_data)[20:29] <- paste("src", colnames(all_data)[20:29], sep = "_")
 colnames(all_data)[30:39] <- paste("dest", colnames(all_data)[30:39], sep = "_")
 
+all_data$Malicious <- ifelse(all_data$Malicious ==1, "Yes", "No")
+
 set.seed(134)
 
 train_index <- sample(1:nrow(all_data), 3000, replace= FALSE)
@@ -55,63 +57,7 @@ boxplot(all_data[all_data[,"mean_duration"],"mean_duration"]~all_data[all_data[,
 
 
 
-##################### Caret Implementation of Radial SVM ##################### 
-
-#Start clusters
-cluster <- makeCluster(detectCores())
-registerDoParallel(cluster)
-
-
-control <- trainControl(method="repeatedcv", number=10, 
-                        summaryFunction=twoClassSummary, classProbs=T,
-                        savePredictions = T,allowParallel = TRUE)
-
-
-svm_Radial <- train(as.factor(Malicious) ~., data = caret_data, method = "svmRadial",
-                    trControl=control,
-                    preProcess = c("center"),
-                    tuneLength = 10)
-
-print(svm_Radial)
-
-# Select a parameter setting
-selectedIndices <- svm_Radial$pred$C == 32
-
-
-g <- ggplot(svm_Radial$pred[selectedIndices, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
-  geom_roc(n.cuts=0) + 
-  coord_equal() +
-  style_roc()
-
-g + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(g))$AUC, 4)))
-
-
-#test
-test_pred_svmr <- predict(svm_Radial, newdata = caret_test[,-1])
-confusionMatrix(test_pred_svmr, as.factor(caret_test[,1]))
-
-##################### SVM-R Results #####################
-# Confusion Matrix and Statistics
-# 
-#               Reference
-# Prediction    0    1
-#           0 1058  207
-#           1    0   10
-# 
-# Accuracy : 0.8376          
-# 95% CI : (0.8162, 0.8575)
-# Sensitivity : 1.00000         
-# Specificity : 0.04608         
-# Pos Pred Value : 0.83636 (Correct Benign)         
-# Neg Pred Value : 1.00000  (Correct Malicious)      
-#F1 = 0.4554445
-
-#F1 AUC and ROC
-
-#Balanced Accuracy : 0.52304 
-
-
-##################### Caret Implementation of Random Forest #####################
+##################### Caret Implementation of Custom Random Forest #####################
 
 #Create custom RF function for grid search in Caret 
 customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
@@ -144,7 +90,7 @@ crf <- randomForest(caret_data[,-1], as.factor(caret_data[,1]), mtry = 6, ntree 
 test_pred_crf <- predict(crf, newdata = caret_test[,-1])
 confusionMatrix(test_pred_crf, as.factor(caret_test[,1]))
 
-##################### Random Forest Results #####################
+##################### Custom Random Forest Results #####################
 # Confusion Matrix and Statistics
 # 
 #              Reference
@@ -164,29 +110,3 @@ confusionMatrix(test_pred_crf, as.factor(caret_test[,1]))
 #F1 = 0.4962482
 
 # Balanced Accuracy : 0.9852          
-
-#Different malware famililes
-#Percent parameters used
-
-####################################ROC CURVE####################################
-# Calculating AUC
-auc <- roc(ifelse(caret_test[,1]=="0",1,0), ifelse(test_pred_svmr=="0",1,0))
-auc1 <- roc(ifelse(caret_test[,1]=="0",1,0), ifelse(test_pred_crf=="0",1,0))
-print(auc$auc) # 0.5
-print(auc1$auc) # 0.4983
-
-# calculating the values for ROC curve
-pred <- prediction(as.numeric(as.character(test_pred_svmr)), as.numeric(caret_test$Malicious))
-perf <- performance(pred, measure = "tpr", x.measure = "fpr")
-pred1 <- prediction(as.numeric(as.character(test_pred_crf)), as.numeric(caret_test$Malicious))
-perf1 <- performance(pred1, measure = "tpr", x.measure = "fpr")
-# changing params for the ROC plot - width, etc
-par(mar=c(5,5,2,2),xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1.4)
-# plotting the ROC curve
-plot(perf, col = "blue")
-plot(perf1, add = TRUE, col = "red")
-# calculating AUC
-auc <- performance(pred, "auc")
-auc # 0.5
-auc1 <- performance(pred1, "auc")
-auc1 # 0.4983051
