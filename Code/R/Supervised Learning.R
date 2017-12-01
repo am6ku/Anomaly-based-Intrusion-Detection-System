@@ -6,6 +6,7 @@ library(gbm)
 library(caret)
 library(pROC)
 library(tidyverse)
+library(plotROC)
 
 
 #Parallelization
@@ -32,39 +33,20 @@ caret_test <- all_data[-train_index,-c(2:6)]
 
 ##################### Data Exploration #####################
 
-#First run to check variable importance
-set.seed(12)
-rf1 <- randomForest(all_data[,-c(1:6)], all_data[,1], mtry = 2, ntree = 300, importance = T)
-var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
-
-#Asthetic changes to importance plot
-imp <- data.frame((rf1$importance)[,4])
-
-imp <- imp %>% rownames_to_column(var="Variables") %>% remove_rownames
-colnames(imp)[2] <-  "MeanGiniDecrease"
-imp <- imp[order(-imp$MeanGiniDecrease),][1:25,]
-
-ggplot(imp) + geom_point(aes(x = MeanGiniDecrease,y = reorder(Variables, MeanGiniDecrease)), size = 5, color = "sienna2")+
-              ylab("Variables") + 
-              theme(panel.background = element_rect(fill = 'grey18'),
-              axis.text=element_text(size=12, face = "bold",color = "grey93"),
-              axis.title=element_text(size=20,face="bold",color = "grey93"),
-              plot.background = element_rect(fill = "grey18"))
-
-
 #Mean interval Distribution
 test1 <- all_data[all_data$mean_intvl<30000,]
 
-ggplot(data = test1,aes(x= Malicious, y=mean_intvl, fill = Malicious)) + geom_boxplot()+ 
-  theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
+plot1 <- ggplot(data = test1,aes(x= Malicious, y=mean_intvl, fill = Malicious)) + geom_boxplot()+
+        scale_fill_manual(values=c("green", "red"))+
+        theme(aspect.ratio = 3/6,axis.text=element_text(size=12, face = "bold",color = "grey19"),
         axis.title=element_text(size=20,face="bold",color = "grey19"))
-
 
 
 #Mean Source Packets
 test2 <- all_data[all_data$mean_src_pkts<100,]
 
 ggplot(data = test2,aes(x= Malicious, y= mean_src_pkts, fill = Malicious)) + geom_boxplot()+
+  scale_fill_manual(values=c("green", "red"))+
   theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
         axis.title=element_text(size=20,face="bold",color = "grey19"))
 
@@ -72,11 +54,14 @@ ggplot(data = test2,aes(x= Malicious, y= mean_src_pkts, fill = Malicious)) + geo
 #Mean Duration
 test3 <- all_data[all_data$mean_duration<1000,]
 
-ggplot(data = test3,aes(x= Malicious, y= mean_duration, fill = Malicious)) + geom_boxplot()+
-  theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
-        axis.title=element_text(size=20,face="bold",color = "grey19"))
+plot2 <- ggplot(data = test3,aes(x= Malicious, y= mean_duration, fill = Malicious)) + geom_boxplot()+
+  scale_fill_manual(values=c("green", "red"))+
+  theme(aspect.ratio = 3/6,axis.text=element_text(size=12, face = "bold",color = "grey19"),
+        axis.title=element_text(size=20,face="bold",color = "grey19"))+
+  stat_summary(fun.y=mean, colour="black", geom="point", shape=18, size=3)+
+  geom_text(data = test3, aes(label = Malicious, y = mean_intvl))
 
-
+grid.arrange(plot1, plot2, ncol=2)
 
 ##################### Caret Implementation of Radial SVM ##################### 
 
@@ -231,6 +216,28 @@ k <- ggplot(nb$pred[selectedIndices_nb, ], aes(m = Yes,d=factor(obs, levels = c(
 k + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(k))$AUC, 4)))
 
 
+###################### Importance plots ###################
+
+#First run to check variable importance
+set.seed(12)
+rf1 <- randomForest(all_data[,-c(1:6)], all_data[,1], mtry = 2, ntree = 300, importance = T)
+var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
+
+#Asthetic changes to importance plot
+imp <- data.frame((rf1$importance)[,4])
+
+imp <- imp %>% rownames_to_column(var="Variables") %>% remove_rownames
+colnames(imp)[2] <-  "MeanGiniDecrease"
+imp <- imp[order(-imp$MeanGiniDecrease),][1:25,]
+
+plot3 <- ggplot(imp) + geom_point(aes(x = MeanGiniDecrease,y = reorder(Variables, MeanGiniDecrease)), size = 5, color = "sienna2")+
+  ylab("Variables") + 
+  theme(panel.background = element_rect(fill = 'grey18'),
+        axis.text=element_text(size=12, face = "bold",color = "grey93"),
+        axis.title=element_text(size=20,face="bold",color = "grey93"),
+        plot.background = element_rect(fill = "grey18"))
+
+
 
 ###################### ROC plots ###################
 
@@ -250,8 +257,6 @@ colnames(nb_no_preds)[2] <- "Naive Bayes"
 
 
 #Merge probabilities
-all_preds <- merge(rf_no_preds,svm_no_preds, nb_no_preds, by =  c("obs", "rowIndex"))
-
 all_preds <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("obs", "rowIndex"), all = TRUE),list(rf_no_preds,svm_no_preds, nb_no_preds))
 
 
@@ -262,12 +267,12 @@ longtest <- melt_roc(all_preds, "obs", c("Random Forest", "Radial SVM", "Naive B
 #Plot
 combined_roc <- ggplot(longtest, aes(d = D, m = M, color = name )) + geom_roc(n.cuts = F, size = 3)
   
-        
-
-combined_roc+ annotate("text", y=0.28, x=0.74,color = "grey93",size = 8,label=paste("RF AUC =",round((calc_auc(h))$AUC, 4)))+
+plot4 <- combined_roc+ annotate("text", y=0.28, x=0.74,color = "grey93",size = 8,label=paste("RF AUC =",round((calc_auc(h))$AUC, 4)))+
               annotate("text", y=0.23, x=0.74,color = "grey93",size = 8,label=paste("SVM AUC =", round((calc_auc(g))$AUC, 4)))+
               annotate("text", y=0.18, x=0.74,color = "grey93",size = 8,label=paste("NB AUC =", round((calc_auc(k))$AUC, 4)))+
               theme(panel.background = element_rect(fill = 'grey18'),
               axis.text=element_text(size=12, face = "bold",color = "grey93"),
               axis.title=element_text(size=20,face="bold",color = "grey93"),
               plot.background = element_rect(fill = "grey18"))
+
+grid.arrange(plot1, plot2, ncol=2)
