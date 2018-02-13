@@ -1,2 +1,1 @@
-# IDS-Modelling
-Capstone data modelling repo 
+# IDS-Modelling 
