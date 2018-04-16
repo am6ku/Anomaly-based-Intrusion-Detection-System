@@ -15,8 +15,7 @@ library(caret)
 set.seed(11)
 
 ########################## Reading & Splitting Data ##############################
-dir = '/Users/babraham/Google Drive/Grad_School/Cyber_Research/Anomaly-based-Intrusion-Detection-System/Code/Data Modelling/R'
-all_data <- read.csv(paste(dir,'merged_data_final.csv',sep="/"), header=T) #reading in the data
+all_data <- read.csv('merged_data_final.csv', header=T) #reading in the data
 
 #get rid of corrupted trace sample
 all_data <- all_data[which(all_data$File != "traces_141_1.log.csv"),]
@@ -25,7 +24,6 @@ all_data <- all_data[which(all_data$File != "traces_141_1.log.csv"),]
 all_data <- all_data[,-c(1)]
 
 drop_cols <- c('srcIP','destIP','destPt','protocol','startTime','File','File.1','Type','Family')
-
 
 ########################## Log transform skewed columns ##############################
 skewed_columns <- c('flowct','mean_dest_bytes','stdev_dest_bytes','mean_dest_pkts','stdev_dest_pkts','mean_duration',
@@ -41,7 +39,7 @@ all_data$Family  <- factor(all_data$Family , levels = c('Bunitu', 'Conflicker', 
 summary_flowct <- malicious_traces %>% group_by(Family) %>% summarise('Median (Flowcount)'= round(median(flowct),1), 'Std dev (Flowcount)' = round(sd(flowct),1), 
                                                               'Median (Mean Duration)'= round(median(mean_duration),1), 'Std dev (Mean Duration)' = round(sd(mean_duration),1),
                                                               'Median (Mean Source Packets)'= round(median(mean_src_pkts),1), 'Std dev (Mean Source Packets)' = round(sd(mean_src_pkts),1))
-View(summary_flowct)
+#View(summary_flowct)
 
 
 ########################## Log transform skewed columns ##############################
@@ -174,10 +172,14 @@ perform_LOO <- function(LOO_datasets, thresh, mtype="lr"){
       preProc <- c("range")
     }
     
+    else if (mtype == "nb"){
+      drop_cols <- c('C', 'I', 'Q', 'T', 'c', 'i', 'q', 's', 't')
+      mal_data <- mal_data[,!(colnames(mal_data) %in% drop_cols)]
+    }
     cluster <- makeCluster(detectCores())
     registerDoParallel(cluster)
     set.seed(234)
-    control <- trainControl(method="cv", 
+    control <- trainControl(method="cv",
                             summaryFunction=twoClassSummary, classProbs=T,
                             savePredictions = T,allowParallel = TRUE)
     
@@ -188,7 +190,7 @@ perform_LOO <- function(LOO_datasets, thresh, mtype="lr"){
     levels(family_mal_data$Malicious) <- c('Benign','Malicious')
     
     #train model
-    model <- train(x=mal_data[,-1], y=as.factor(mal_data[,'Malicious']), method = mtype,
+    model <- train(x=mal_data[,-1], y = as.factor(mal_data[,'Malicious']), method = mtype,
                 trControl=control,
                 preProcess = preProc,
                 metric = "ROC",
@@ -233,7 +235,7 @@ loo_df <- data.frame(family = character(), balanced_accuracy = integer(), precis
 for(family_nm in names(family_thresh)){
   loo_datasets <- create_LOO_datasets(all_data = all_data,family_nm = family_nm, thresh=0.5)
   #loo_outcome <- logistic_regr_LOO(loo_datasets, thresh = family_thresh[family_nm])
-  loo_outcome <- perform_LOO(loo_datasets, thresh = family_thresh[family_nm], mtype="nn")
+  loo_outcome <- perform_LOO(loo_datasets, thresh = family_thresh[family_nm], mtype="nb")
   loo_df <- rbind(loo_df, data.frame(family = family_nm, balanced_accuracy = unlist(loo_outcome)[[1]],
                                      precision = unlist(loo_outcome)[[2]] , recall= unlist(loo_outcome)[[3]],
                                      F1Score = unlist(loo_outcome)[[4]], auc = unlist(loo_outcome)[[5]]))
@@ -242,7 +244,7 @@ for(family_nm in names(family_thresh)){
 print(loo_df)
 
 #Logistic Regression
-# family balanced_accuracy precision    recall   F1Score       auc
+#       family balanced_accuracy precision    recall   F1Score       auc
 # 1     Miuref         0.8748175 0.8187461 0.9627737 0.8849379 0.9776413
 # 2     Bunitu         0.6972477 0.6244053 0.9900102 0.7658098 0.9211530
 # 3     Upatre         0.9729730 0.9816514 0.9639640 0.9727273 0.9918026
@@ -253,7 +255,7 @@ print(loo_df)
 # 8       Zeus         0.4946889 0.4972635 0.9650986 0.6563467 0.7209687
 
 #Random Forest
-# family balanced_accuracy precision    recall   F1Score       auc
+#       family balanced_accuracy precision    recall   F1Score       auc
 # 1     Miuref         0.9934307 0.9985251 0.9883212 0.9933969 0.9997568
 # 2     Bunitu         0.7726809 0.6880360 0.9977574 0.8144450 0.9540091
 # 3     Upatre         0.9954955 0.9910714 1.0000000 0.9955157 0.9994319
@@ -264,7 +266,7 @@ print(loo_df)
 # 8       Zeus         0.5318665 0.5166403 0.9893778 0.6788131 0.9250313
 
 #Neural Net
-# family balanced_accuracy precision    recall   F1Score       auc
+#       family balanced_accuracy precision    recall   F1Score       auc
 # 1     Miuref         0.8291971 0.9966960 0.6605839 0.7945566 0.9351833
 # 2     Bunitu         0.5919470 0.5511686 0.9904179 0.7082149 0.9061623
 # 3     Upatre         0.9504505 0.9098361 1.0000000 0.9527897 0.9919649
@@ -273,6 +275,16 @@ print(loo_df)
 # 6   Trickbot         0.8561321 1.0000000 0.7122642 0.8319559 0.9594607
 # 7 Conflicker         0.8156250 0.9577039 0.6604167 0.7817509 0.9558247
 # 8       Zeus         0.8338392 1.0000000 0.6676783 0.8007279 0.9892351
+#Naive Bayes
+#       family balanced_accuracy precision    recall   F1Score       auc
+# 1     Miuref         0.5879562 0.5485691 0.9934307 0.7068294 0.4919173
+# 2     Bunitu         0.5154944 0.5079515 0.9898063 0.6713683 0.6090418
+# 3     Upatre         0.7117117 0.6358382 0.9909910 0.7746479 0.5090496
+# 4     Dridex         0.6355932 0.5784314 1.0000000 0.7329193 0.6256823
+# 5     Necurs         0.5297952 0.5154143 0.9962756 0.6793651 0.5950158
+# 6   Trickbot         0.6768868 0.6086957 0.9905660 0.7540395 0.5356444
+# 7 Conflicker         0.5416667 0.5218818 0.9937500 0.6843615 0.6371441
+# 8       Zeus         0.7435508 0.6636086 0.9878604 0.7939024 0.8643459
 
 #################### Implement logistic regression for entire dataset #######################
 

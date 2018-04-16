@@ -10,6 +10,10 @@ library(glmnet)
 
 set.seed(11)
 
+#Start clusters
+cluster <- makeCluster(detectCores())
+registerDoParallel(cluster)
+
 ########################## Reading & Splitting Data ##############################
 all_data <- read.csv('merged_data_final.csv', header=T) #reading in the data
 
