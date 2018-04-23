@@ -40,9 +40,9 @@ all_data$Family  <- factor(all_data$Family , levels = c('Bunitu', 'Conflicker', 
 
 summary_flowct <- malicious_traces %>% group_by(Family) %>% summarise('Median (Flowcount)'= round(median(flowct),1), 'Std dev (Flowcount)' = round(sd(flowct),1), 
                                                               'Median (Mean Duration)'= round(median(mean_duration),1), 'Std dev (Mean Duration)' = round(sd(mean_duration),1),
-                                                              'Median (Mean Source Packets)'= round(median(mean_src_pkts),1), 'Std dev (Mean Source Packets)' = round(sd(mean_src_pkts),1))
+                                                              'Median (Mean Source Packets)'= round(median(mean_src_pkts),1), 'Std dev (Mean Source Packets)' = round(sd(mean_src_pkts),1),
+                                                              'Median (Mean intvl)'= round(median(mean_intvl),1), 'St dev (invl)' = round(sd(mean_intvl),1))
 View(summary_flowct)
-
 
 ########################## Log transform skewed columns ##############################
 #all_data[skewed_columns] <- sapply(all_data[skewed_columns], function(x) log(x+1))
@@ -107,7 +107,6 @@ logistic_regr_LOO <- function(LOO_datasets, thresh){
   final_lambda_lse <- final_model$lambda.1se
   
   probs <- predict(final_model,newx = as.matrix(family_mal_data[,-c(1)]),s=final_lambda_lse,type="response")
-  
   preds <- rep(0,nrow(probs))
   preds[probs>thresh] <- 1
   
@@ -116,20 +115,20 @@ logistic_regr_LOO <- function(LOO_datasets, thresh){
   
   # Calculate AUC values
   roccurve <- pROC::roc(family_mal_data[,'Malicious'] ~ as.vector(probs))#
-  #plot(roccurve)  
+  plot(roccurve)  
   auc_value <- pROC::auc(roccurve)
-  
+  plot(1-roccurve$specificities, roccurve$sensitivities)
   # # Create ROC plots using ROCR package
   # roc_pred <- ROCR::prediction( as.vector(probs), family_mal_data[,'Malicious'] )
   # roc_perf <- ROCR::performance( roc_pred, "tpr", "fpr" )
   # 
-  # # Create ROC plots for Miuref and Bunitu
-  # if(family_nm=='Miuref'){
-  #   plot( roc_perf, col = "black", lty=3)
-  #   legend("topright", c(family_nm), lty=3, 
+  # Create ROC plots for Miuref and Bunitu
+  # if(family_nm=='Zeus'){
+  #   plot(roc_perf.predictions,roc_perf, col = "black", lty=3)
+  #   legend("topright", c(family_nm), lty=3,
   #          col = "black", bty="n", inset=c(0,0.2))
-  #   
-  # } 
+
+  #}
   # if(family_nm=='Bunitu'){
   #   plot( roc_perf, add = TRUE, col= "black", lty=5)
   #   legend("topright", c(family_nm), lty=5, 
@@ -276,6 +275,7 @@ print(loo_df)
 
 #################### Implement logistic regression for entire dataset #######################
 
+
 # Create all_data2 by removing unnecessary columns
 all_data2 <- all_data[,!(colnames(all_data) %in% drop_cols)]
 
@@ -304,4 +304,123 @@ cnfMatrix <- confusionMatrix(preds, as.factor(full_test[,'Malicious']))
 cnfMatrix$byClass['Balanced Accuracy'][1]
 cnfMatrix$byClass['Precision']
 cnfMatrix$byClass['Recall']
+
+#Zeus test
+zeus <- all_data[which(all_data$Family == "Zeus"),]
+normal <- all_data[which(all_data$Family == "Normal"),]
+normal_inds <- sample(1:nrow(normal),nrow(all_data[all_data['Family']=="Zeus",]),replace = FALSE ) 
+zeus_all = data.frame(rbind(zeus,normal[normal_inds,]))
+zeus_all <- zeus_all[,!(colnames(zeus_all) %in% drop_cols)]
+zeus_all$Malicious <- as.factor(zeus_all$Malicious)
+levels(zeus_all$Malicious) <- c('Benign', 'Malicious')
+
+
+
+##############pre-log training/results########################
+cluster <- makeCluster(detectCores())
+registerDoParallel(cluster)
+
+set.seed(234)
+control <- trainControl(method="cv", 
+                        summaryFunction=twoClassSummary, classProbs=T,
+                        savePredictions = T,allowParallel = TRUE)
+
+#train rf on zeus data without any preprocessing
+rf <- train(as.factor(Malicious) ~., data = zeus_all, method = "rf",
+            trControl=control,
+            metric = "ROC",
+            tuneLength = 4)
+print(rf) #best model: 11    0.9998393  0.9893939  0.9984848
+# variable importance plot
+rf1 <- randomForest(zeus_all[,-c(1)], zeus_all[,1], mtry = 11, ntree = 300, importance = T)
+var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
+
+zeus_summary <- zeus_all %>% group_by(Malicious) %>% summarise('avg_mean_intvl' = mean(mean_intvl), 'avg_st_intvl' = mean(stdev_intvl),
+                                                               'avg_mean_src_pkts' = mean(mean_src_pkts), 'avg_st_src_pkts' = mean(stdev_src_pkts),
+                                                               'avg_F' = mean(F))
+View(zeus_summary)
+
+#boxplots for most important features
+metrics = c("mean_intvl", "stdev_intvl", "H", "mean_src_pkts", "stdev_src_pkts",  "t")
+plots <- list()
+idx = 1
+for(m in metrics){
+  print(m)
+  pdata = zeus_all[which(zeus_all[,c(m)] < quantile(zeus_all[,m], probs=c(.9))),]
+  plots[[idx]] = ggplot(data = pdata,aes_string(x= "Malicious", y= m, fill = "Malicious")) + geom_boxplot()+
+    scale_fill_manual(values=c("green", "red"))+
+    theme(aspect.ratio = 3/6,axis.text=element_text(size=12, face = "bold",color = "grey19"),
+          axis.title=element_text(size=20,face="bold",color = "grey19"))
+  idx = idx + 1
+}
+grid.arrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]], plots[[5]], plots[[6]], ncol=2)
+
+##############post-log transforms training/results########################
+
+#train rf on zeus data without any preprocessing
+rf_log <- train(as.factor(Malicious) ~., data = zeus_all, method = "rf",
+            trControl=control,
+            metric = "ROC",
+            tuneLength = 4)
+print(rf_log)   #best model: 2    0.9957334  0.9802564  0.9741958
+
+# variable importance plot
+rf2 <- randomForest(zeus_all[,-c(1)], zeus_all[,1], mtry = 11, ntree = 300, importance = T)
+var_imp2 <- varImpPlot(rf2, sort = TRUE, main = "Variable Importance")
+
+zeus_summary <- zeus_all %>% group_by(Malicious) %>% summarise('avg_mean_intvl' = mean(mean_intvl), 'avg_st_intvl' = mean(stdev_intvl),
+                                                               'avg_mean_src_pkts' = mean(mean_src_pkts), 'avg_st_src_pkts' = mean(stdev_src_pkts),
+                                                               'avg_F' = mean(F))
+View(zeus_summary)
+
+#apply log transform to all skewed columns
+zeus_all[skewed_columns] <- sapply(zeus_all[skewed_columns], function(x) log(x+1))
+
+metrics = c("mean_intvl", "stdev_intvl", "H", "mean_src_pkts", "stdev_src_pkts",  "t")
+plots_log <- list()
+idx = 1
+for(m in metrics){
+  print(m)
+  pdata = zeus_all[which(zeus_all[,c(m)] < quantile(zeus_all[,m], probs=c(.9))),]
+  plots_log[[idx]] = ggplot(data = pdata,aes_string(x= "Malicious", y= m, fill = "Malicious")) + geom_boxplot()+
+    scale_fill_manual(values=c("green", "red"))+
+    theme(aspect.ratio = 3/6,axis.text=element_text(size=12, face = "bold",color = "grey19"),
+          axis.title=element_text(size=20,face="bold",color = "grey19"))
+  idx = idx + 1
+}
+grid.arrange(plots_log[[1]], plots_log[[2]], plots_log[[3]], plots_log[[4]], plots_log[[5]], plots_log[[6]], ncol=2)
+
+#apply k-means clustering to all malicious traffic - first, find optimal # of clusters.
+clustering_data <- all_data[all_data['Family']!='Normal',!(colnames(all_data) %in% drop_cols)]
+#remove flags
+clustering_data <- clustering_data[,c(2:12)]
+wss <- (nrow(clustering_data)-1)*sum(apply(clustering_data,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(clustering_data,
+                                     centers=i)$withinss)
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+     ylab="Within groups sum of squares")
+
+#best k values: 3 and 9 (but the latter is simply the # of bot families...)
+
+#perform pca on malicious data
+pc <- prcomp(clustering_data)
+# First for principal components
+comp <- data.frame(pc$x[,1:4])
+# Plot
+plot(comp, pch=16, col=rgb(0,0,0,0.5))
+
+#apply K-means with optimal # of clusters to principal components
+k <- kmeans(comp, 3, nstart=25, iter.max=1000)
+library(RColorBrewer)
+library(scales)
+palette(alpha(brewer.pal(9,'Set1'), 0.5))
+plot(comp, col=k$clust, pch=16)
+
+clustering_comb <- data.frame(cbind(clustering_data, comp, k$cluster))
+
+##########logstic regression with and without transform for Zeus (LOO)###################
+loo_datasets <- create_LOO_datasets(all_data=all_data, family_nm="Zeus", 0.5)
+res = logistic_regr_LOO(loo_datasets, 0.5)
+
+
 cnfMatrix$byClass['F1']

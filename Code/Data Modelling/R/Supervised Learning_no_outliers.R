@@ -15,9 +15,8 @@ library(doParallel)
 
 
 ##################### Reading & Splitting Data #####################
-setwd('/Users/babraham/Google Drive/Grad_School/Fall_2017/Cyber_Research/Anomaly-based-Intrusion-Detection-System/Code/Data Modelling/R')
-dir = '/Users/babraham/Google Drive/Grad_School/Cyber_Research/Anomaly-based-Intrusion-Detection-System/Code/Data Modelling/R'
-all_data <- read.csv(paste(dir,'merged_data_final.csv',sep="/"), header=T) #reading in the data
+setwd('/Users/babraham/Google Drive/Grad_School/Cyber_Research/Anomaly-based-Intrusion-Detection-System/Data/Traces')
+all_data <- read.csv('merged_data_final.csv', header=T) #reading in the data
 
 for(c in colnames(all_data)){
   print(paste(c,length(which(is.na(all_data[,c]))),sep='-'))
@@ -35,11 +34,55 @@ colnames(all_data)[30:39] <- paste("dest", colnames(all_data)[30:39], sep = "_")
 all_data$Malicious <- as.factor(ifelse(all_data$Malicious ==1, "Yes", "No"))
 set.seed(134)
 
-train_index <- sample(1:nrow(all_data), 16500, replace= FALSE)
+#Get rid of outliers (all data < 1% or > 99% quantiles)
+all_data_colsub <- all_data[,-c(2:6,38:42)]
+outlierlist <- c()
+for (c in colnames(all_data_colsub)[-1]){
+  mininds <- which(all_data_colsub[,c] < quantile(all_data_colsub[,c], probs=c(.01)))
+  maxinds <- which(all_data_colsub[,c] > quantile(all_data_colsub[,c], probs=c(.99)))
+  outlierlist <- c(outlierlist, mininds, maxinds)
+}
+#Get rid of duplicate outlier indices
+outlierlist <- unique(outlierlist)
+#remove outliers from data
+all_data_colsub <- all_data_colsub[-c(outlierlist),]
 
-caret_data <- all_data[train_index,-c(2:6,38:42)]
-caret_test <- all_data[-train_index,-c(2:6,38:42)]
+#Get rid of all useless flag columns (all zeros)
+zero_list <- c()
+for (c in c(2:length(colnames(all_data_colsub)))){
+  if(is.numeric(all_data_colsub[,c])){
+    if (sum(all_data_colsub[,c]) == 0){
+      zero_list <- c(zero_list, c)
+    }
+  }
+}
+all_data_colsub <- all_data_colsub[,-c(zero_list)]
 
+
+#train_index_old <- sample(1:nrow(all_data_colsub), 16500, replace= FALSE)
+train_index <- sample(1:nrow(all_data_colsub), 16500, replace= FALSE)
+
+caret_data <- all_data_colsub[train_index,]
+caret_test <- all_data_colsub[-train_index,]
+
+#caret_data_no_pp <- all_data_colsub[train_index_old,]
+#caret_test_no_pp <- all_data_colsub[-train_index_old,]
+
+#Normalize Data
+cnorm_data <- caret_data
+cnorm_test <- caret_test
+
+for(c in colnames(cnorm_data)[-c(1)]){
+  cmin = min(cnorm_data[,c(c)])
+  cmax = max(cnorm_data[,c(c)])
+  cnorm_data[,c] = sapply(cnorm_data[,c], function(x){return(abs(x - cmin)/(cmax - cmin))}) 
+}
+
+for(c in colnames(cnorm_test)[-c(1)]){
+  cmin = min(cnorm_test[,c(c)])
+  cmax = max(cnorm_test[,c(c)])
+  cnorm_test[,c] = sapply(cnorm_test[,c], function(x){return(abs(x - cmin)/(cmax - cmin))}) 
+}
 
 ##################### Data Exploration #####################
 library(ggplot2)
@@ -72,7 +115,7 @@ ggplot(data = test4,aes(x= Malicious, y= delta, fill = Malicious)) + geom_boxplo
   scale_fill_manual(values=c("green", "red"))+
   theme(axis.text=element_text(size=12, face = "bold",color = "grey19"),
         axis.title=element_text(size=20,face="bold",color = "grey19"))
-m <- "mean_src_pkts"
+
 
 #Mean Duration
 test3 <- all_data[all_data$mean_duration<500,]
@@ -80,10 +123,9 @@ test3 <- all_data[all_data$mean_duration<500,]
 plot2 <- ggplot(data = test3,aes(x= Malicious, y= mean_duration, fill = Malicious)) + geom_boxplot()+
   scale_fill_manual(values=c("green", "red"))+
   theme(aspect.ratio = 3/6,axis.text=element_text(size=12, face = "bold",color = "grey19"),
-        axis.title=element_text(size=20,face="bold",color = "grey19"))
-  #stat_summary(fun.y=mean, colour="black", geom="point", shape=18, size=3)+
-  #geom_text(data = test3, aes(label = Malicious, y = mean_duration))
-
+        axis.title=element_text(size=20,face="bold",color = "grey19"))+
+  stat_summary(fun.y=mean, colour="black", geom="point", shape=18, size=3)+
+  geom_text(data = test3, aes(label = Malicious, y = mean_intvl))
 
 #Mean flowct
 quantile(all_data$flowct, na.rm=TRUE)
@@ -98,21 +140,6 @@ plotfc <- ggplot(data = testfc,aes(x= Malicious, y= flowct, fill = Malicious)) +
 
 grid.arrange(plot1, plot2, ncol=2)
 
-#dest_t, src_H, src_t, mean_src_pkts, dest_r
-metrics = c("dest_t", "src_H", "src_T", "dest_r", "mean_src_pkts",  "src_R")
-plots <- list()
-idx = 1
-for(m in metrics){
-  print(m)
-  pdata = caret_data[which(caret_data[,c(m)] < quantile(caret_data[,m], probs=c(.9))),]
-  plots[[idx]] = ggplot(data = pdata,aes_string(x= "Malicious", y= m, fill = "Malicious")) + geom_boxplot()+
-    scale_fill_manual(values=c("green", "red"))+
-    theme(aspect.ratio = 3/6,axis.text=element_text(size=12, face = "bold",color = "grey19"),
-          axis.title=element_text(size=20,face="bold",color = "grey19"))
-  idx = idx + 1
-}
-grid.arrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]], plots[[5]], plots[[6]], ncol=2)
-
 ##################### Caret Implementation of Logistic Regression ##################### 
 
 #Start clusters
@@ -126,73 +153,62 @@ control <- trainControl(method="cv",
                         )
 
 
-lr <- train(as.factor(Malicious) ~., data = caret_data, method = "glm",
+lr_norm <- train(as.factor(Malicious) ~., data = cnorm_data, method = "glm",
             family = "binomial",
             trControl=control,
             preProcess = c("BoxCox"),
             metric = "ROC",
             tuneLength = 4)
-test_pred_lr <- predict(lr, newdata=caret_test[,-1])
+lr_old <- train(as.factor(Malicious) ~., data = caret_data, method = "glm",
+                family = "binomial",
+                trControl=control,
+                preProcess = c("BoxCox"),
+                metric = "ROC",
+                tuneLength = 4)
 
-#Since caret train didn't converge, try training with glm where we can set max iterations
-lr2 <- glm(as.factor(Malicious) ~ ., data=caret_data, family="binomial", 
-           control = glm.control(maxit = 1000))
+test_pred_lr_norm <- predict(lr, newdata=cnorm_test[,-1])
+test_pred_lr_old <- predict(lr_old, newdata=caret_test_old[,-1])
 
-#Make data frame for logistic regression predictions that mimics caret df structure
-#create columns
-train_pred_lr2 <- predict.glm(lr2, newdata=caret_data[,-1], type="response")
-test_pred_lr2 <- predict.glm(lr2, newdata=caret_test[,-1], type="response")
-rowIndex <- attributes(test_pred_lr2)
-rowIndex <- as.integer(rowIndex$names)
-Yes <- as.numeric(test_pred_lr2)
-pred <- sapply(Yes, function(x){ifelse(x>.5, "Yes", "No")})
-pred <- factor(pred, levels = c("No", "Yes"))
-obs <- as.factor(caret_test[,1])
-
-#build dataframe
-lr.df <- data.frame(Yes)
-lr.df$pred <- pred
-lr.df$obs <- obs
-lr.df$rowIndex <- rowIndex
-
-#Confusion Matrix
-confusionMatrix(lr.df$pred, caret_test[,1])
+#Confusion Matrices
+confusionMatrix(test_pred_lr, cnorm_test[,1])
+confusionMatrix(test_pred_lr_old, caret_test[,1])
 
 #ROC
-selectedIndices_lr <- rep(TRUE, length(lr.df$pred))
-l <- ggplot(lr.df, aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
+selectedIndices_lr <- rep(TRUE, nrow(caret_data))
+l <- ggplot(lr$pred[selectedIndices_lr, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
   geom_roc(n.cuts=0) + 
   coord_equal() +
   style_roc()
 
-l + annotate("text", y=0.25, x=0.75,label=paste("LR AUC =", round((calc_auc(h))$AUC, 4)))
+l + annotate("text", y=0.25, x=0.75,label=paste("LR AUC =", round((calc_auc(l))$AUC, 4)))
 
 calc_auc(l)
-##################### LR Results #####################
+###############################
 # Confusion Matrix and Statistics
 # 
 # Reference
 # Prediction   No  Yes
-# No  1787   28
-# Yes  413 1646
+# No  1099   28
+# Yes   29  760
 # 
-# Accuracy : 0.8862         
-# 95% CI : (0.8757, 0.896)
-# No Information Rate : 0.5679         
-# P-Value [Acc > NIR] : < 2.2e-16      
+# Accuracy : 0.9703          
+# 95% CI : (0.9616, 0.9774)
+# No Information Rate : 0.5887          
+# P-Value [Acc > NIR] : <2e-16          
 # 
-# Kappa : 0.7743         
-# Mcnemar's Test P-Value : < 2.2e-16      
+# Kappa : 0.9386          
+# Mcnemar's Test P-Value : 1               
 # 
-# Sensitivity : 0.8123         
-# Specificity : 0.9833         
-# Pos Pred Value : 0.9846         
-# Neg Pred Value : 0.7994         
-# Prevalence : 0.5679         
-# Detection Rate : 0.4613         
-# Detection Prevalence : 0.4685         
-# Balanced Accuracy : 0.8978         
-
+# Sensitivity : 0.9743          
+# Specificity : 0.9645          
+# Pos Pred Value : 0.9752          
+# Neg Pred Value : 0.9632          
+# Prevalence : 0.5887          
+# Detection Rate : 0.5736          
+# Detection Prevalence : 0.5882          
+# Balanced Accuracy : 0.9694          
+# 
+# 'Positive' Class : No  
 ##################### Caret Implementation of Radial SVM ##################### 
 library(caret)
 #Start clusters
@@ -230,28 +246,31 @@ test_pred_svmr <- predict(svm_Radial, newdata = caret_test[,-1])
 confusionMatrix(test_pred_svmr, as.factor(caret_test[,1]))
 
 ##################### SVM-R Results #####################
-# "Confusion Matrix and Statistics
+# Confusion Matrix and Statistics
+# 
 # Reference
 # Prediction   No  Yes
-# No  1854  248
-# Yes  346 1426
+# No  1119   17
+# Yes    9  771
 # 
-# Accuracy : 0.8467          
-# 95% CI : (0.8349, 0.8579)
-# No Information Rate : 0.5679          
-# P-Value [Acc > NIR] : < 2.2e-16       
+# Accuracy : 0.9864          
+# 95% CI : (0.9802, 0.9911)
+# No Information Rate : 0.5887          
+# P-Value [Acc > NIR] : <2e-16          
 # 
-# Kappa : 0.6898          
-# Mcnemar's Test P-Value : 6.893e-05       
+# Kappa : 0.9719          
+# Mcnemar's Test P-Value : 0.1698          
 # 
-# Sensitivity : 0.8427          
-# Specificity : 0.8519          
-# Pos Pred Value : 0.8820          
-# Neg Pred Value : 0.8047          
-# Prevalence : 0.5679          
-# Detection Rate : 0.4786          
-# Detection Prevalence : 0.5426          
-# Balanced Accuracy : 0.8473
+# Sensitivity : 0.9920          
+# Specificity : 0.9784          
+# Pos Pred Value : 0.9850          
+# Neg Pred Value : 0.9885          
+# Prevalence : 0.5887          
+# Detection Rate : 0.5840          
+# Detection Prevalence : 0.5929          
+# Balanced Accuracy : 0.9852          
+# 
+# 'Positive' Class : No
 ##################### Caret Implementation of Random Forest ##################### 
 
 #Start clusters
@@ -294,25 +313,28 @@ confusionMatrix(test_pred_rf, as.factor(caret_test[,1]))
 # 
 # Reference
 # Prediction   No  Yes
-# No  2186    9
-# Yes   14 1665
+# No  1119    4
+# Yes    9  784
 # 
-# Accuracy : 0.9941          
-# 95% CI : (0.9911, 0.9962)
-# No Information Rate : 0.5679          
+# Accuracy : 0.9932          
+# 95% CI : (0.9884, 0.9964)
+# No Information Rate : 0.5887          
 # P-Value [Acc > NIR] : <2e-16          
 # 
-# Kappa : 0.9879          
-# Mcnemar's Test P-Value : 0.4042          
+# Kappa : 0.986           
+# Mcnemar's Test P-Value : 0.2673          
 # 
-# Sensitivity : 0.9936          
-# Specificity : 0.9946          
-# Pos Pred Value : 0.9959          
-# Neg Pred Value : 0.9917          
-# Prevalence : 0.5679          
-# Detection Rate : 0.5643          
-# Detection Prevalence : 0.5666          
-# Balanced Accuracy : 0.9941          
+# Sensitivity : 0.9920          
+# Specificity : 0.9949          
+# Pos Pred Value : 0.9964          
+# Neg Pred Value : 0.9887          
+# Prevalence : 0.5887          
+# Detection Rate : 0.5840          
+# Detection Prevalence : 0.5861          
+# Balanced Accuracy : 0.9935          
+# 
+# 'Positive' Class : No              
+
 
 ##################### Caret Implementation of Naive Bayes ##################### 
 
@@ -336,8 +358,6 @@ print(nb)
 
 # Select a parameter setting
 selectedIndices_nb <- which(nb$pred$usekernel == "TRUE" & nb$pred$fL == 0 & nb$pred$adjust == 1)
-selectedIndices_nb <- which(nb$pred$fL == 0)
-
 
 k <- ggplot(nb$pred[selectedIndices_nb, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
   geom_roc(n.cuts=0) + 
@@ -355,153 +375,33 @@ confusionMatrix(test_pred_nb, as.factor(caret_test[,1]))
 # 
 # Reference
 # Prediction   No  Yes
-# No    83   25
-# Yes 2117 1649
+# No  1028  180
+# Yes  100  608
 # 
-# Accuracy : 0.4471          
-# 95% CI : (0.4313, 0.4629)
-# No Information Rate : 0.5679          
-# P-Value [Acc > NIR] : 1               
-# 
-# Kappa : 0.0198          
-# Mcnemar's Test P-Value : <2e-16          
-# 
-# Sensitivity : 0.03773         
-# Specificity : 0.98507         
-# Pos Pred Value : 0.76852         
-# Neg Pred Value : 0.43787         
-# Prevalence : 0.56789         
-# Detection Rate : 0.02142         
-# Detection Prevalence : 0.02788         
-# Balanced Accuracy : 0.51140         
-# 
-# 'Positive' Class : No  
-##################### Caret Implementation of Neural Net ##################### 
-
-#Start clusters
-cluster <- makeCluster(detectCores())
-registerDoParallel(cluster)
-
-set.seed(456)
-control <- trainControl(method="cv", 
-                        summaryFunction=twoClassSummary, classProbs=T,
-                        savePredictions = T,allowParallel = TRUE)
-
-num_vars <- ncol(caret_data) -1
-mlp_grid = expand.grid(layer1 = num_vars,
-                       layer2 = 10, 
-                       layer3 = 2)
-
-
-mlp_grid2 = expand.grid(layer1 = c(10,num_vars),
-                       layer2 = c(50,10,5), 
-                       layer3 = c(5,2,0)
-                       )
-
-##Params##
-
-#10, 5,0 -> .933, .67, .95
-#10,10,0 -> .933, .77, .70
-#10,50,0 -> .934, .82, .70
-#26,10,0 -> .933, .75, .77
-#26,50,0 -> .934, .83, .64
-
-nn <- train(as.factor(Malicious) ~., data = caret_data, method = "mlpML",
-            trControl=control,
-            preProcess = c("range"),
-            metric = "ROC",
-            tuneGrid=mlp_grid2)
-
-print(nn)
-
-# Select a parameter setting
-layer1 <- c(26,10)
-layer2 <- c(50,10, 5)
-
-
-plots <- c()
-idx <- 1
-for(l1 in layer1){
-  for(l2 in layer2){
-    selectedIndices_nn <- nn_nout$pred$layer1 == l1 & nn$pred$layer2 == l2 & nn$pred$layer3 == 0
-    plots[[idx]] <- ggplot(nn_nout$pred[selectedIndices_nn, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
-      geom_roc(n.cuts=0) + 
-      coord_equal() +
-      style_roc()
-    auc <- round(calc_auc(plots[[idx]]),4)
-    print(auc[3])
-    results[[idx]] = c(l1,l2,auc[3],idx)
-    idx = idx + 1
-  }
-}
-df_trans <-  as.data.frame(t(matrix(unlist(results), nrow=length(unlist(results[1])))))
-colnames(df_trans) <- c("L1", "L2", "AUC", "idx")
-
-#Best params: L1 = 10, l2=5, l3=0
-#retrain nn w/ best params
-layers <- expand.grid(layer1=c(10), layer2=c(5), layer3=c(0))
-nn_opt <- train(as.factor(Malicious) ~., data = caret_data, method = "mlpML",
-            trControl=control,
-            preProcess = c("range"),
-            metric = "ROC",
-            tuneGrid=layers)
-layers <- expand.grid(layer1=c(26,10), layer2=c(5,10,50), layer3=c(0))
-nn_nout <- train(as.factor(Malicious) ~., data = cdata_nout, method = "mlpML",
-                trControl=control,
-                preProcess = c("range"),
-                metric = "ROC",
-                tuneGrid=layers)
-
-
-selectedIndices_nn <- nn$pred$layer1 == 10 & nn$pred$layer2 == 5 & nn$pred$layer3 == 0
-selectedIndices_nn_nout <- nn_nout$pred$layer1 == 10 & nn_nout$pred$layer2 == 5 & nn_nout$pred$layer3 == 0
-
-k <- ggplot(nn$pred[selectedIndices_nn, ], aes(m = Yes,d=factor(obs, levels = c("Yes", "No")))) + 
-  geom_roc(n.cuts=0) + 
-  coord_equal() +
-  style_roc()
-
-k + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(k))$AUC, 4)))
-auc <- round(calc_auc(k),4)
-
-test_pred_nn <- predict(nn_opt, newdata = caret_test[,-1])
-test_pred_nn_nout <- predict(nn_nout, newdata = caret_test[,-1])
-
-confusionMatrix(test_pred_nn, as.factor(caret_test[,1]))
-confusionMatrix(test_pred_nn_nout, as.factor(caret_test[,1]))
-
-
-##################### Neural Network Results ##################### 
-# Confusion Matrix and Statistics
-# 
-# Reference
-# Prediction   No  Yes
-# No  1855  128
-# Yes  345 1546
-# 
-# Accuracy : 0.8779          
-# 95% CI : (0.8672, 0.8881)
-# No Information Rate : 0.5679          
+# Accuracy : 0.8539          
+# 95% CI : (0.8372, 0.8694)
+# No Information Rate : 0.5887          
 # P-Value [Acc > NIR] : < 2.2e-16       
 # 
-# Kappa : 0.755           
-# Mcnemar's Test P-Value : < 2.2e-16       
-#                                           
-#             Sensitivity : 0.8432          
-#             Specificity : 0.9235          
-#          Pos Pred Value : 0.9355          
-#          Neg Pred Value : 0.8176          
-#              Prevalence : 0.5679          
-#          Detection Rate : 0.4788          
-#    Detection Prevalence : 0.5119          
-#       Balanced Accuracy : 0.8834          
-#                                           
-#        'Positive' Class : No
+# Kappa : 0.6935          
+# Mcnemar's Test P-Value : 2.345e-06       
+# 
+# Sensitivity : 0.9113          
+# Specificity : 0.7716          
+# Pos Pred Value : 0.8510          
+# Neg Pred Value : 0.8588          
+# Prevalence : 0.5887          
+# Detection Rate : 0.5365          
+# Detection Prevalence : 0.6305          
+# Balanced Accuracy : 0.8415          
+# 
+# 'Positive' Class : No              
+
 ###################### Importance plots ###################
-calc_auc(k)
+
 #First run to check variable importance
 set.seed(12)
-rf1 <- randomForest(all_data[,-c(1:6, 38:41)], all_data[,1], mtry = 2, ntree = 300, importance = T)
+rf1 <- randomForest(all_data_colsub[,-c(1)], all_data_colsub[,1], mtry = 2, ntree = 300, importance = T)
 var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
 
 #Asthetic changes to importance plot
@@ -528,44 +428,38 @@ rf_preds <- rf$pred[selectedIndices_rf, ]
 svm_preds <- svm_Radial$pred[selectedIndices_svm, ]
 nb_preds <- nb$pred[selectedIndices_nb, ]
 lr_preds <- lr.df
-nn_preds <- nn$pred[selectedIndices_nn,]
 
 #Select only relevant columns
 rf_no_preds <- rf_preds[, c(2,4,5)]
 svm_no_preds <- svm_preds[, c(2,4,5)]
 nb_no_preds <- nb_preds[, c(2,4,5)]
 lr_no_preds <- lr_preds[, c(1,3,4)]
-nn_no_preds <- nn_preds[, c(2,4,5)]
 
 #Rename probablilites column to identify model
 colnames(rf_no_preds)[2] <- "Random Forest"
 colnames(svm_no_preds)[2] <- "Radial SVM"
 colnames(nb_no_preds)[2] <- "Naive Bayes"
 colnames(lr_no_preds)[1] <- "Logistic Regression"
-colnames(nn_no_preds)[2] <- "Neural Net"
 
 
 #Merge probabilities
-all_preds <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("obs", "rowIndex"), all = TRUE),list(rf_no_preds,svm_no_preds, nb_no_preds, lr_no_preds, nn_no_preds))
-all_preds_sub <- all_preds[which(!is.na(all_preds$`Radial SVM`)),]
+all_preds <- Reduce(function(dtf1, dtf2) merge(dtf1, dtf2, by = c("obs", "rowIndex"), all = TRUE),list(rf_no_preds,svm_no_preds, nb_no_preds, lr_no_preds))
+
 ########### With Naive Bayes ###################
 #Melt into longform for vizualization
-longtest <- melt_roc(all_preds, "obs", c("Random Forest", "Radial SVM", "Naive Bayes", "Logistic Regression", "Neural Net"))
+longtest <- melt_roc(all_preds, "obs", c("Random Forest", "Radial SVM", "Naive Bayes", "Logistic Regression"))
 
 #Plot
-combined_roc <- ggplot(longtest, aes(d = D, m = M, color = name )) + geom_roc(n.cuts = F, size = 1)
+combined_roc <- ggplot(longtest, aes(d = D, m = M, color = name )) + geom_roc(n.cuts = F, size = 2)
   
-plot4 <- combined_roc+
-          theme(axis.text=element_text(size=12,color = "grey18"),
-              axis.title=element_text(size=20,color = "grey18"),
-              legend.text = element_text(size=16),
-              legend.title = element_text(size=18),
-              plot.background = element_rect(fill = "white"), 
-              panel.background = element_rect(fill = "grey97"),
-              panel.grid.major = element_line(color="grey77"),
-              panel.grid.minor = element_line(color="grey77"),
-              )+
-              labs(x="False Positive Rate", y="True Positive Rate", color="Model")
+plot4 <- combined_roc+ annotate("text", y=0.13, x=0.74,color = "grey93",size = 8,label=paste("LR AUC =", round((calc_auc(l))$AUC, 4)))+
+              annotate("text", y=0.18, x=0.74,color = "grey93",size = 8,label=paste("NB AUC =", round((calc_auc(k))$AUC, 4)))+
+              annotate("text", y=0.23, x=0.75,color = "grey93",size = 8,label=paste("SVM AUC =", round((calc_auc(g))$AUC, 4)))+
+              annotate("text", y=0.28, x=0.74,color = "grey93",size = 8,label=paste("RF AUC =",round((calc_auc(h))$AUC, 4)))+
+              theme(panel.background = element_rect(fill = 'grey18'),
+              axis.text=element_text(size=12, face = "bold",color = "grey93"),
+              axis.title=element_text(size=20,face="bold",color = "grey93"),
+              plot.background = element_rect(fill = "grey18"))
 
 ########### Without Naive Bayes ###################
 #Melt into longform for vizualization
