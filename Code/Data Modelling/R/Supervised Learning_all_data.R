@@ -29,6 +29,9 @@ all_data <- all_data[which(all_data$File != "traces_141_1.log.csv"),]
 #get rid of index
 all_data <- all_data[,-c(1)]
 
+drop_flags <- c("t","T","Q","q","H","h")
+all_data <- all_data[,!(colnames(all_data) %in% drop_flags)]
+
 colnames(all_data)[20:29] <- paste("src", colnames(all_data)[20:29], sep = "_")
 colnames(all_data)[30:39] <- paste("dest", colnames(all_data)[30:39], sep = "_")
 
@@ -37,9 +40,13 @@ set.seed(134)
 
 train_index <- sample(1:nrow(all_data), 16500, replace= FALSE)
 
-caret_data <- all_data[train_index,-c(2:6,38:42)]
-caret_test <- all_data[-train_index,-c(2:6,38:42)]
+caret_data <- all_data[train_index,-c(2:6,32:35)]
+caret_test <- all_data[-train_index,-c(2:6,32:35)]
 
+caret_data$Malicious <- as.factor(caret_data$Malicious)
+levels(caret_data$Malicious) <- c("Benign", "Malicious")
+caret_test$Malicious <- as.factor(caret_test$Malicious)
+levels(caret_test$Malicious) <- c("Benign", "Malicious")
 
 ##################### Data Exploration #####################
 library(ggplot2)
@@ -98,7 +105,6 @@ plotfc <- ggplot(data = testfc,aes(x= Malicious, y= flowct, fill = Malicious)) +
 
 grid.arrange(plot1, plot2, ncol=2)
 
-#dest_t, src_H, src_t, mean_src_pkts, dest_r
 metrics = c("dest_t", "src_H", "src_T", "dest_r", "mean_src_pkts",  "src_R")
 plots <- list()
 idx = 1
@@ -119,6 +125,9 @@ grid.arrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]], plots[[5]], plots[[
 cluster <- makeCluster(detectCores())
 registerDoParallel(cluster)
 
+#Tuning length for all caret models
+tun_len <- 5
+
 set.seed(234)
 control <- trainControl(method="cv", 
                         summaryFunction=twoClassSummary, classProbs=T,
@@ -131,7 +140,7 @@ lr <- train(as.factor(Malicious) ~., data = caret_data, method = "glm",
             trControl=control,
             preProcess = c("BoxCox"),
             metric = "ROC",
-            tuneLength = 4)
+            tuneLength = tun_len)
 test_pred_lr <- predict(lr, newdata=caret_test[,-1])
 
 #Since caret train didn't converge, try training with glm where we can set max iterations
@@ -209,7 +218,7 @@ svm_Radial <- train(as.factor(Malicious) ~., data = caret_data, method = "svmRad
                     trControl=control,
                     preProcess = c("center"),
                     metric = "ROC",
-                    tuneLength = 10, 
+                    tuneLength = tun_len, 
                     na_action=na.exclude)
 
 print(svm_Radial)
@@ -227,8 +236,8 @@ g + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(g))$AUC
 
 #test
 test_pred_svmr <- predict(svm_Radial, newdata = caret_test[,-1])
-confusionMatrix(test_pred_svmr, as.factor(caret_test[,1]))
-
+svm_cfn_matrix = confusionMatrix(test_pred_svmr, as.factor(caret_test[,1]))
+svm_cfn_matrix$byClass[['F1']]
 ##################### SVM-R Results #####################
 # "Confusion Matrix and Statistics
 # Reference
@@ -268,7 +277,7 @@ rf <- train(as.factor(Malicious) ~., data = caret_data, method = "rf",
                     trControl=control,
                     preProcess = c("center"),
                     metric = "ROC",
-                    tuneLength = 4)
+                    tuneLength = tun_len)
 
 print(rf)
 
@@ -287,7 +296,7 @@ h + annotate("text", y=0.25, x=0.75,label=paste("RF AUC =", round((calc_auc(h))$
 calc_auc(h)
 #test
 test_pred_rf <- predict(rf, newdata = caret_test[,-1])
-confusionMatrix(test_pred_rf, as.factor(caret_test[,1]))
+rf_cm <- confusionMatrix(test_pred_rf, as.factor(caret_test[,1]))
 
 ##################### Random Forest Results #####################
 # Confusion Matrix and Statistics
@@ -330,7 +339,7 @@ nb <- train(as.factor(Malicious) ~., data = caret_data, method = "nb",
             trControl=control,
             preProcess = c("center"),
             metric = "ROC",
-            tuneLength = 10)
+            tuneLength = tun_len)
 
 print(nb)
 
@@ -347,8 +356,8 @@ k <- ggplot(nb$pred[selectedIndices_nb, ], aes(m = Yes,d=factor(obs, levels = c(
 k + annotate("text", y=0.25, x=0.75,label=paste("AUC =", round((calc_auc(k))$AUC, 4)))
 
 test_pred_nb <- predict(nb, newdata = caret_test[,-1])
-confusionMatrix(test_pred_nb, as.factor(caret_test[,1]))
-
+nb_cm <-  confusionMatrix(test_pred_nb, as.factor(caret_test[,1]))
+nb_cm$byClass[['F1']]
 ##################### Naive Bayes Results ##################### 
 
 # Confusion Matrix and Statistics
@@ -410,14 +419,13 @@ nn <- train(as.factor(Malicious) ~., data = caret_data, method = "mlpML",
             trControl=control,
             preProcess = c("range"),
             metric = "ROC",
-            tuneGrid=mlp_grid2)
+            tuneGrid=mlp_grid)
 
 print(nn)
 
 # Select a parameter setting
 layer1 <- c(26,10)
 layer2 <- c(50,10, 5)
-
 
 plots <- c()
 idx <- 1
@@ -501,7 +509,10 @@ confusionMatrix(test_pred_nn_nout, as.factor(caret_test[,1]))
 calc_auc(k)
 #First run to check variable importance
 set.seed(12)
-rf1 <- randomForest(all_data[,-c(1:6, 38:41)], all_data[,1], mtry = 2, ntree = 300, importance = T)
+rf1 <- randomForest(all_data[,-c(1:6, 32:35)], all_data[,1], mtry = 11, ntree = 300, importance = T)
+rf_tr <- randomForest(caret_data[,-c(1, 27:31)], caret_data[,1], mtry = 11, ntree = 300, importance = T)
+rf_tr_2 <- randomForest(caret_data[,-c(1, 27:31)], caret_data[,1], mtry = 2, ntree = 300, importance = T)
+
 var_imp <- varImpPlot(rf1, sort = TRUE, main = "Variable Importance")
 
 #Asthetic changes to importance plot
@@ -523,7 +534,6 @@ confusionMatrix(test_pred_rf1, as.factor(caret_test[,1]))
 
 
 ###################### ROC plots ###################
-
 rf_preds <- rf$pred[selectedIndices_rf, ]
 svm_preds <- svm_Radial$pred[selectedIndices_svm, ]
 nb_preds <- nb$pred[selectedIndices_nb, ]
@@ -580,6 +590,9 @@ plot4 <- combined_roc+ annotate("text", y=0.18, x=0.74,color = "grey93",size = 8
         axis.text=element_text(size=12, face = "bold",color = "grey93"),
         axis.title=element_text(size=20,face="bold",color = "grey93"),
         plot.background = element_rect(fill = "grey18"))
+  + geom_line(aes(c(0,0), c(1,1), colour=g1), d1) 
+
+abline(a=0, b= 1)
 plot4
 
 grid.arrange(plot1, plot2, ncol=2)
